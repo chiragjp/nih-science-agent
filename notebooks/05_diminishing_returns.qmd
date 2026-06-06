@@ -1,0 +1,79 @@
+---
+title: "5 · Reproducing Open Mike — diminishing returns"
+subtitle: "Does research output per dollar fall as a PI's grant support rises?"
+format:
+  html:
+    toc: true
+    code-fold: show
+jupyter: python3
+---
+
+The NIH Extramural Nexus ("Open Mike", M. Lauer) repeatedly found **diminishing
+returns** to grant support: as a principal investigator's total NIH funding
+rises, research **output per dollar** falls ("Award or Reward?"; the Grant
+Support Index work). This notebook reproduces that pattern from public data.
+
+**Our approximation.** Support = total RePORTER funding per PI (a proxy for the
+internal Grant Support Index). Output = summed iCite **Relative Citation Ratio
+(RCR)** over the PI's authoritatively linked publications. See
+`docs/open-mike-use-cases.md` for the full reproducibility catalog.
+
+```{python}
+import pandas as pd
+from nih_science_agent.tools import meta_research as meta
+```
+
+## Run the analysis over a bounded portfolio
+
+We take a focused NIDDK portfolio so PIs span a real range of grant support, then
+analyze a stratified sample across that range (publication fetching is the cost).
+
+```{python}
+res = meta.grant_support_vs_productivity(
+    institutes=["NIDDK"], query="beta cell", fiscal_years=[2014, 2015],
+    funding_floor=200_000, max_pis=48,
+)
+print(f"{res.pis_analyzed} of {res.pis_total} PIs analyzed")
+for n in res.notes:
+    print(" -", n)
+```
+
+## Output per dollar by funding quartile
+
+```{python}
+pd.DataFrame([b.model_dump() for b in res.bins])[
+    ["label", "n_pis", "mean_funding", "mean_weighted_rcr", "mean_rcr_per_million"]
+]
+```
+
+Output-per-dollar should decline across the lower quartiles — the diminishing-
+returns signature. The Spearman correlation between support and output-per-dollar
+is negative when the pattern holds:
+
+```{python}
+print("Spearman(support, output/$):", res.spearman_funding_vs_output_per_dollar)
+```
+
+## Support vs output (the sublinear curve)
+
+The core claim is that *total* output rises with funding but **sublinearly** — so
+a log-log slope below 1 indicates diminishing returns.
+
+```{python}
+df = pd.DataFrame([r.model_dump() for r in res.rows])
+df = df[(df["total_funding"] > 0) & (df["weighted_rcr"] > 0)]
+ax = df.plot.scatter(x="total_funding", y="weighted_rcr", loglog=True,
+                     title="PI grant support vs summed RCR (log-log)")
+ax.set_xlabel("total funding ($)"); ax.set_ylabel("summed RCR (output)")
+```
+
+## Honest reading
+
+This bounded, single-topic sample (~48 PIs, two fiscal years) **directionally**
+reproduces the pattern but is underpowered and noisy at the high-funding end —
+unlike Lauer's analyses over tens of thousands of investigators. Faithful
+population-scale reproduction needs the **ExPORTER bulk files in DuckDB**, not
+on-demand API queries (the API caps offsets well below NIH's annual award count).
+Other caveats baked into the tool's `notes`: output is lifetime RCR (recent
+awards are right-censored) and authoritative-only (a floor), and support is a
+funding proxy for the Grant Support Index.

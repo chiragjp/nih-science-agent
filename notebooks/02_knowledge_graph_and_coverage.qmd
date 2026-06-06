@@ -1,0 +1,77 @@
+---
+title: "2 · Knowledge graph & linkage coverage"
+subtitle: "Assemble award-centered graphs, then audit how complete the linkage is"
+format:
+  html:
+    toc: true
+    code-fold: show
+jupyter: python3
+---
+
+The connectors stop being separate lookups once their edges are assembled into
+one typed graph. This notebook builds an **award-centered knowledge graph**, then
+uses the **coverage / bias-audit** tools to report *how much* of a portfolio is
+actually linked — and where the gaps are.
+
+```{python}
+from nih_science_agent.graph import builder as graph_builder
+from nih_science_agent.linkage import coverage as coverage_mod, edges as E
+```
+
+## Build a graph around one award
+
+Nodes are `TYPE:id` strings; every edge carries provenance (source, method,
+authoritative vs inferred, confidence).
+
+```{python}
+g = graph_builder.build_award_graph("R01DK075877")
+stats = g.stats()
+print(f"{stats['nodes']} nodes, {stats['edges']} edges "
+      f"({stats['authoritative_edges']} authoritative)")
+stats["node_types"]
+```
+
+```{python}
+stats["predicates"]
+```
+
+The award's NIH-funded clinical trials, traversed from the graph:
+
+```{python}
+award = "AWARD:R01DK075877"
+for nct in g.neighbors(award, node_type=E.CLINICAL_TRIAL):
+    print(nct, "—", g.g.nodes[nct].get("title"))
+```
+
+## Coverage over a portfolio
+
+Build a multi-award graph for a query, then report per-edge-type coverage:
+the numerator (awards with ≥1 edge of that type) over the denominator (awards in
+the portfolio), with an authoritative/inferred split. Nothing is silently
+truncated — the population size is always reported.
+
+```{python}
+portfolio = graph_builder.build_portfolio_graph(
+    institutes=["NIAID"], mechanisms=["DP2"], fiscal_years=list(range(2015, 2025)),
+    max_awards=20, with_trials=False,
+)
+report = coverage_mod.coverage_report(portfolio)
+print(f"Coverage over {report.denominator} awards:")
+for r in report.rows:
+    print(f"  {r.predicate:<14} {r.coverage:5.0%}  ({r.numerator}/{r.denominator})")
+```
+
+## Bias audit
+
+Coverage is rarely uniform. Stratify a single edge type by IC, mechanism, or
+award age to see *where* linkage is thin (e.g. recent awards haven't published
+yet). This is the design doc's discipline: every analysis ships with its bias.
+
+```{python}
+organoid = graph_builder.build_portfolio_graph(
+    query="organoid", fiscal_years=list(range(2016, 2023)),
+    max_awards=25, with_trials=False,
+)
+for row in coverage_mod.stratify_coverage(organoid, predicate="produced", by="ic"):
+    print(f"  {row.stratum:<8} {row.coverage:5.0%}  ({row.numerator}/{row.denominator})")
+```

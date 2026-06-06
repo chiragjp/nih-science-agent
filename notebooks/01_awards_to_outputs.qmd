@@ -1,0 +1,96 @@
+---
+title: "1 · From awards to outputs"
+subtitle: "RePORTER awards → publications (with iCite RCR) → clinical trials"
+format:
+  html:
+    toc: true
+    code-fold: show
+    df-print: paged
+jupyter: python3
+---
+
+This notebook walks the core spine of the platform: find NIH **awards**, follow
+their **authoritative publication links**, enrich those with **iCite** citation
+metrics, and surface the **clinical trials** an award funded.
+
+Everything here uses the library's Python API directly — the same deterministic
+functions the `nih-agent` CLI calls. Responses are cached under
+`data/cache/`, so re-running is fast and offline after the first pass.
+
+```{python}
+from nih_science_agent.connectors import reporter, icite, clinicaltrials
+from nih_science_agent.linkage import edges as linkage
+```
+
+## Find awards
+
+Search RePORTER by topic, fiscal years, and Institute. Records come back
+normalized and typed.
+
+```{python}
+awards = reporter.search_projects(
+    query="PFAS proteomics",
+    fiscal_years=list(range(2018, 2025)),
+    institutes=["NIEHS"],
+    limit=5,
+)
+for a in awards:
+    cost = f"${a.total_cost:,.0f}" if a.total_cost else "n/a"
+    print(f"{a.core_project_num:<14} FY{a.fiscal_year}  {a.nih_institute_or_center}  {cost}")
+    print(f"   {a.project_title}")
+```
+
+### Search by investigator
+
+PI search uses RePORTER's `pi_names` criterion. Use a full name (a bare surname
+matches every PI with it).
+
+```{python}
+khatri = reporter.search_projects(pi_names=["Purvesh Khatri"], limit=100)
+print(f"{len(khatri)} awards; institutions:",
+      sorted({a.organization.name for a in khatri if a.organization.name}))
+```
+
+## Link an award to its publications
+
+`link_award_publications` joins RePORTER's authoritative publication list with
+PubMed metadata and (optionally) iCite RCR / citation metrics. Each result
+carries a typed, provenance-bearing edge.
+
+```{python}
+links = linkage.link_award_publications("R01ES032470", enrich=True, metrics=True, limit=8)
+for lk in links[:6]:
+    rcr = lk.metrics.relative_citation_ratio if lk.metrics else None
+    title = lk.article.title if lk.article else "(no metadata)"
+    print(f"PMID {lk.pmid}  RCR {rcr if rcr is not None else '—'}")
+    print(f"   {title[:90]}")
+```
+
+Every edge is explicitly **authoritative** (asserted by RePORTER), with full
+provenance:
+
+```{python}
+links[0].edge.model_dump()
+```
+
+## Citation metrics directly
+
+iCite's Relative Citation Ratio is field- and time-normalized (1.0 = median
+NIH-funded paper).
+
+```{python}
+for m in icite.fetch_metrics(["22745249", "36656942"]):  # CRISPR landmarks
+    print(f"PMID {m.pmid} ({m.year})  RCR {m.relative_citation_ratio}  "
+          f"cites {m.citation_count}  NIH pct {m.nih_percentile}")
+```
+
+## Clinical trials an award funded
+
+ClinicalTrials.gov records that *self-report* the grant number give an
+authoritative award→trial link.
+
+```{python}
+trials = clinicaltrials.find_trials_for_grant("R01DK075877")
+for t in trials:
+    print(f"{t.nct_id}  {t.overall_status}  {t.phase or 'N/A'}  —  {t.brief_title[:60]}")
+```

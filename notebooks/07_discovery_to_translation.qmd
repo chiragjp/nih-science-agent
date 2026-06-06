@@ -1,0 +1,88 @@
+---
+title: "7 · Discovery → translation"
+subtitle: "Tracing a basic-science grant's reach into the clinic via citations"
+format:
+  html:
+    toc: true
+    code-fold: show
+jupyter: python3
+---
+
+The direct award→trial link (a trial self-reporting its grant number) captures
+grants that *fund* trials — but misses the basic grant that *enabled* a therapy
+years later. This notebook recovers that chain through the **citation graph**,
+using a signal NIH precomputes for us: iCite's `cited_by_clin` — the *clinical*
+articles citing a paper.
+
+```
+award → publications → clinical citers (iCite cited_by_clin) → reach + APT
+```
+
+```{python}
+import pandas as pd
+from nih_science_agent.tools import meta_research as meta
+```
+
+## One grant's lineage
+
+```{python}
+lin = meta.translation_lineage("U01HG007437")  # ClinGen — clinical-variant knowledge base
+print(f"{lin.core_project_num}: {lin.publications} pubs, mean APT {lin.mean_apt}")
+print(f"  {lin.pubs_with_clinical_citation} pubs cited by clinical work → "
+      f"{lin.clinical_citation_reach} distinct clinical papers reached")
+```
+
+## Ranking a portfolio: which grants reached the clinic?
+
+`scan_translation` dedups award-years to grants (keeping the start year, so
+latency is honest), runs the lineage on each, and ranks by clinical reach.
+
+```{python}
+gwas = meta.scan_translation(query="GWAS", fiscal_years=list(range(2008, 2014)), max_grants=15)
+pd.DataFrame([
+    {"core": r.core_project_num, "pubs": r.publications, "APT": r.mean_apt,
+     "clinical_reach": r.clinical_citation_reach, "title": (r.title or "")[:48]}
+    for r in gwas[:8]
+])
+```
+
+## How do different technologies reach the clinic?
+
+The interesting result is not just *how much* but *how*: different discovery
+technologies translate in different shapes.
+
+```{python}
+def top_reach(query, years, n=15):
+    rows = meta.scan_translation(query=query, fiscal_years=list(years), max_grants=n)
+    reach = [r.clinical_citation_reach for r in rows]
+    apt = [r.mean_apt for r in rows if r.mean_apt is not None]
+    return {
+        "top_reach": max(reach) if reach else 0,
+        "median_reach": int(pd.Series(reach).median()) if reach else 0,
+        "mean_APT": round(sum(apt) / len(apt), 2) if apt else None,
+    }
+
+rows = []
+for tech, q, yrs in [
+    ("GWAS", "GWAS", range(2008, 2014)),
+    ("Single-cell", "single cell sequencing", range(2012, 2018)),
+    ("Exposomics", "exposome", range(2012, 2020)),
+]:
+    rows.append({"technology": tech, **top_reach(q, yrs)})
+pd.DataFrame(rows)
+```
+
+GWAS reaches the clinic most (pharmacogenomics — anti-TNF response, drug
+transporters); single-cell is younger and more basic; **exposomics' reach runs
+through infrastructure** — centers and cohorts (HERCULES, ECHO, HHEAR) — rather
+than a drug pipeline. The platform makes that contrast *characterizable from
+public data*.
+
+## Caveats
+
+- **Inferred, not proof.** Clinical reach = papers iCite flags `is_clinical` that
+  cite the grant's work — not a therapy or a funded trial.
+- **Centers/training grants inflate reach** (they umbrella many papers); APT helps
+  separate focused discovery from infrastructure.
+- **Younger fields are right-censored** — less time to translate.
+- Publication linkage is authoritative-only (a floor).

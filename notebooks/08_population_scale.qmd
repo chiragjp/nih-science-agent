@@ -1,0 +1,74 @@
+---
+title: "8 · Population-scale analyses (ExPORTER → DuckDB)"
+subtitle: "Funding concentration, output-per-$, FOA type, and latency — no API caps"
+format:
+  html:
+    toc: true
+    code-fold: show
+jupyter: python3
+---
+
+The RePORTER API caps result offsets well below NIH's annual award count, so
+all-NIH questions need the **bulk ExPORTER files in DuckDB**. This notebook runs
+the population-scale analyses directly against that store.
+
+> **Prerequisite:** build the store first (one time, a few minutes):
+> ```sh
+> nih-agent bulk build 2000:2025        # awards (2.1M rows)
+> nih-agent bulk build-pubs 2000:2025   # award→publication links (6.1M)
+> ```
+
+```{python}
+import pandas as pd
+from nih_science_agent.storage import duckdb_store
+
+con = duckdb_store.connect()
+print(con.execute("SELECT count(*) FROM awards").fetchone()[0], "award rows")
+print(con.execute("SELECT count(*) FROM publinks").fetchone()[0], "publication links")
+```
+
+## Funding concentration (top-decile share + Gini)
+
+How concentrated is NIH funding among investigators? Computed over *every* award,
+not a sample.
+
+```{python}
+c = duckdb_store.funding_concentration(con, ic="NCI", year=2021, top_n=5)
+print(f"NCI FY2021: {c.n_pis:,} contact PIs · ${c.total_funding:,.0f}")
+print(f"  top 1% hold {c.top1_pct_share:.0%} · top 10% hold {c.top10_pct_share:.0%} · Gini {c.gini:.2f}")
+pd.DataFrame(c.top_pis)
+```
+
+> The extreme top is inflated by large contracts/center grants attributed to one
+> administrative contact PI — aggregate shares and Gini are the robust read.
+
+## Diminishing returns at full scale
+
+Linked-publications-per-\$ by PI funding quartile — the whole population, not the
+48-PI sample of notebook 5.
+
+```{python}
+p = duckdb_store.funding_vs_output(con, ic="NCI", year=2010, funding_floor=250_000)
+print(f"{p.n_pis:,} PIs · Spearman(support, pubs/$) = {p.spearman_funding_vs_pubs_per_dollar}")
+pd.DataFrame([b.model_dump() for b in p.bins])[["label", "n_pis", "mean_funding", "mean_pubs", "mean_pubs_per_million"]]
+```
+
+## Output by FOA type (RFA vs PA)
+
+```{python}
+pd.DataFrame([r.model_dump() for r in duckdb_store.productivity_by_foa_type(con, ic="NCI", year=2010)])
+```
+
+## Grant → first-publication latency (with censoring)
+
+```{python}
+lat = duckdb_store.grant_to_output_latency(con, years=list(range(2005, 2013)))
+print(f"{lat.grants_total:,} grants · {lat.grants_with_output:,} with a linked pub")
+print(f"  median time to first publication: {lat.median_years_to_first_pub:.0f}y "
+      f"(IQR {lat.p25_years:.0f}–{lat.p75_years:.0f}y)")
+print(f"  {lat.pct_censored:.0%} censored (no linked pub — recent grants + incomplete linkage)")
+con.close()
+```
+
+Censoring is reported, not hidden: silently dropping the ~40% of grants with no
+linked publication would bias the median downward.

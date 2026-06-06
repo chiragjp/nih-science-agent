@@ -1,0 +1,72 @@
+---
+title: "3 · Research productivity (publications per dollar)"
+subtitle: "A fair, mechanism-aware ranking — and why naïve versions mislead"
+format:
+  html:
+    toc: true
+    code-fold: show
+jupyter: python3
+---
+
+A tempting metric is "publications per dollar." It is also easy to get wrong:
+shared-facility **center cores** accumulate acknowledgments from everyone using
+them and dominate a naïve ranking, and the metric has a built-in **age bias**
+(older grants have had longer to publish). This notebook uses the
+`pubs_per_dollar` tool, which groups support-years into core grants, splits by
+**mechanism family**, and **discloses** its denominator and any cap.
+
+```{python}
+from nih_science_agent.tools.productivity import pubs_per_dollar, mechanism_family
+```
+
+## A fair cohort: NIAID DP2 (New Innovator) awards
+
+DP2 awards share a fixed budget, so pubs-per-\$ is an apples-to-apples
+comparison within the cohort.
+
+```{python}
+report = pubs_per_dollar(
+    institutes=["NIAID"], mechanisms=["DP2"], fiscal_years=list(range(2015, 2025)),
+    funding_floor=500_000,
+)
+print(f"{report.records_matched} records → {report.grants_matched} grants; "
+      f"analyzed {report.grants_analyzed}")
+for note in report.notes:
+    print("  ⚠", note)
+
+print(f"\n{'pubs/$1M':>9}  {'pubs':>4}  {'cum $':>12}  core")
+for grant in report.results[:8]:
+    ppm = f"{grant.pubs_per_million:.1f}" if grant.pubs_per_million else "n/a"
+    print(f"{ppm:>9}  {grant.publication_count:>4}  ${grant.total_funding:>11,.0f}  "
+          f"{grant.core_project_num}")
+```
+
+## Why the mechanism split matters
+
+Run it across mechanisms on a topic and the center cores leap to the top of the
+raw ranking — an attribution artifact, not real productivity:
+
+```{python}
+mixed = pubs_per_dollar(query="PFAS", institutes=["NIEHS"],
+                        fiscal_years=list(range(2015, 2025)), funding_floor=500_000)
+
+def top(fam, n=4):
+    rows = [r for r in mixed.results if r.mechanism_family == fam]
+    return [(round(r.pubs_per_million, 1), r.core_project_num, r.activity_code) for r in rows[:n]]
+
+print("center_core (inflated by shared-facility acknowledgments):")
+for r in top("center_core"): print("  ", r)
+print("research (the apples-to-apples comparison):")
+for r in top("research"): print("  ", r)
+```
+
+The classifier is a transparent heuristic:
+
+```{python}
+{code: mechanism_family(code) for code in ["R01", "DP2", "P30", "U19", "T32", "K23"]}
+```
+
+> **Caveat.** Even within a mechanism, pubs-per-\$ favors older grants (more
+> time to publish) and undercounts publications that don't cite the grant
+> (RePORTER attribution is incomplete). Use it to compare *within* a cohort, not
+> to crown a winner.
