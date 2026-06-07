@@ -81,6 +81,31 @@ bulk_latency <- function(con, years = NULL, ic = NULL) {
        median = median(lat), p25 = quantile(lat, .25), p75 = quantile(lat, .75))
 }
 
+# IC funding trend at population scale: total $ and distinct core projects per
+# fiscal year (no API caps — straight from the bulk award table).
+bulk_funding_trend <- function(con, ic = NULL, years = NULL) {
+  cl <- c("total_cost > 0")
+  if (!is.null(ic)) cl <- c(cl, sprintf("ic = '%s'", .resolve_ic(ic)))
+  if (!is.null(years)) cl <- c(cl, sprintf("fiscal_year IN (%s)", paste(years, collapse = ",")))
+  w <- paste(cl, collapse = " AND ")
+  DBI::dbGetQuery(con, sprintf(
+    "SELECT fiscal_year, sum(total_cost) funding, count(DISTINCT core_project_num) awards
+     FROM awards WHERE %s GROUP BY fiscal_year ORDER BY fiscal_year", w))
+}
+
+# A bounded sample of an IC's linked PMIDs (for an output-quality read via iCite).
+bulk_sample_pmids <- function(con, ic = NULL, years = NULL, n = 250) {
+  cl <- c("pl.pmid IS NOT NULL")
+  if (!is.null(ic)) cl <- c(cl, sprintf("a.ic = '%s'", .resolve_ic(ic)))
+  if (!is.null(years)) cl <- c(cl, sprintf("a.fiscal_year IN (%s)", paste(years, collapse = ",")))
+  w <- paste(cl, collapse = " AND ")
+  df <- DBI::dbGetQuery(con, sprintf(
+    "SELECT DISTINCT pl.pmid FROM publinks pl
+     JOIN awards a ON a.core_project_num = pl.core_project_num
+     WHERE %s LIMIT %d", w, as.integer(n)))
+  as.character(df$pmid)
+}
+
 # Mechanism family from activity_code (mirrors tools/productivity.mechanism_family):
 # keeps shared-facility cores and training grants from contaminating a
 # research-grant productivity ranking. Compare WITHIN a family, not across.

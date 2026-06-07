@@ -17,6 +17,26 @@ notebooks (02, 03, 08) open the same `data/processed/nih.duckdb` the Python
 | `07_discovery_to_translation.Rmd` | A grant's basic→clinical reach via the citation graph; GWAS / single-cell / exposomics compared |
 | `08_population_scale.Rmd` | Funding concentration (Gini), output-per-$, FOA type, and grant→pub latency — no API caps (DuckDB) |
 
+## The synthesis report (the deliverable)
+
+`portfolio_report.Rmd` is a **parameterized** one-page report that strings the
+whole arc together for one Institute/Center paired with one health condition —
+the artifact a Director reads, not a demo. It takes `ic`, `condition`,
+`year_start`, `year_end` and renders Inputs → Outputs → Translation → Outcome →
+Coverage & caveats, with the IC (administrative) and condition (population) lenses
+explicitly juxtaposed, never divided into one another.
+
+```sh
+Rscript notebooks/render_report.R NIDDK diabetes 2008 2017
+Rscript notebooks/render_report.R NCI    cancer   2008 2017
+```
+
+`render_report.R` writes `portfolio_<IC>_<condition>.html`. Conditions must be in
+the crosswalk (`list_conditions()`). The structural metrics (funding trend,
+concentration/Gini, coverage, latency, productivity) come from the population-scale
+DuckDB store; translation/outcome (trials, FDA labels, mortality) come from live
+ClinicalTrials.gov / openFDA / CDC; a bounded iCite sample gives an RCR read.
+
 ## The R implementation
 
 `../R/` holds the native-R connectors that the notebooks source:
@@ -31,7 +51,8 @@ notebooks (02, 03, 08) open the same `data/processed/nih.duckdb` the Python
 | `fda.R` | openFDA: `fda_drugs_for_indication` |
 | `conditions.R` | condition crosswalk + `condition_pulse` (funding ⋅ trials ⋅ approvals ⋅ mortality) |
 | `analysis.R` | `diminishing_returns`, `translation_scan` |
-| `duckdb_store.R` | population-scale queries over the ExPORTER→DuckDB store (concentration, productivity-by-mechanism, coverage, FOA types, latency, panel) |
+| `duckdb_store.R` | population-scale queries over the ExPORTER→DuckDB store (funding trend, concentration, productivity-by-mechanism, coverage, FOA types, latency, panel) |
+| `report.R` | `build_portfolio_report(ic, condition, years)` — assembles the synthesis report object |
 | `load.R` | sources all of the above (from the project root) |
 
 ## Render

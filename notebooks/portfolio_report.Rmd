@@ -1,0 +1,174 @@
+---
+title: "State of an NIH Portfolio"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    df_print: paged
+    theme: cosmo
+params:
+  ic: "NIDDK"
+  condition: "diabetes"
+  year_start: 2008
+  year_end: 2017
+---
+
+```{r setup, include=FALSE}
+proj <- normalizePath("..")
+knitr::opts_knit$set(root.dir = proj)
+oldwd <- getwd(); setwd(proj)             # load.R + the DuckDB path are project-root relative
+suppressMessages({
+  library(dplyr); library(ggplot2)
+  source("R/load.R")
+})
+knitr::opts_chunk$set(echo = FALSE, message = FALSE, warning = FALSE)
+years <- params$year_start:params$year_end
+R <- build_portfolio_report(ic = params$ic, condition = params$condition, years = years)
+setwd(oldwd)
+fmt_b   <- function(x) sprintf("$%.2fB", x / 1e9)
+fmt_pct <- function(x) sprintf("%+.1f%%", x)
+```
+
+```{r header, results='asis'}
+if (R$has_condition) {
+  cat(sprintf("# %s · %s\n\n", R$ic, R$condition$label))
+  cat(sprintf("### %s portfolio (FY%d–%d), juxtaposed with the nation's %s outcome\n\n",
+              R$ic, min(years), max(years), tolower(R$condition$label)))
+  cat(sprintf(paste0("> **Read this as a juxtaposition, not a scorecard.** The left ",
+    "column is an *administrative* portfolio (everything %s funded); the right ",
+    "column is a *population* outcome for %s, which has many non-NIH drivers and a ",
+    "10-30y lag. The two are placed side by side, never divided into one another.\n"),
+    R$ic, tolower(R$condition$label)))
+} else {
+  cat(sprintf("# %s · portfolio\n\n", R$ic))
+  cat(sprintf("### %s portfolio (FY%d–%d) — structural metrics only\n\n",
+              R$ic, min(years), max(years)))
+  cat(sprintf(paste0("> **%s is cross-cutting.** It funds mechanism, exposure, or ",
+    "methods science that maps to no single leading cause of death, so this report ",
+    "shows the IC's *structural* portfolio (inputs, outputs, coverage) and **omits** ",
+    "a condition-level translation/outcome juxtaposition rather than forcing a ",
+    "misleading one. Re-render with a specific `condition` to add that lens.\n"),
+    R$ic))
+}
+```
+
+```{r headline}
+tot <- sum(R$funding_trend$funding); awd <- sum(R$funding_trend$awards)
+rows <- list(
+  c("NIH funding (IC, window)", fmt_b(tot)),
+  c("Distinct awards (IC)", format(awd, big.mark = ",")),
+  c("Funding concentration (Gini)", sprintf("%.2f", R$concentration$gini)),
+  c("Top-decile PI share", sprintf("%.0f%%", 100 * R$concentration$top10)),
+  c("Linked-pub RCR (sample median)", sprintf("%.2f", median(R$rcr$rcr, na.rm = TRUE))),
+  c("Grant->pub latency (median)", sprintf("%.0f y", R$latency$median)))
+if (R$has_condition) rows <- c(rows, list(
+  c("Clinical trials (condition)", format(R$trials, big.mark = ",")),
+  c("FDA-labeled drugs (condition)", format(R$drugs$total, big.mark = ",")),
+  c("Age-adjusted mortality change", fmt_pct(R$mortality_aadr_change_pct))))
+data.frame(Metric = vapply(rows, `[`, "", 1), Value = vapply(rows, `[`, "", 2))
+```
+
+# 1 · Inputs — what NIH put in
+
+```{r inputs-plot, fig.width=7, fig.height=3}
+ggplot(R$funding_trend, aes(fiscal_year, funding / 1e9)) +
+  geom_col(fill = "steelblue") +
+  scale_x_continuous(breaks = years) +
+  labs(x = NULL, y = "NIH funding ($B)",
+       title = sprintf("%s funding by fiscal year", R$ic)) + theme_minimal()
+```
+
+Across FY`r min(years)`–`r max(years)`, `r R$ic` obligated **`r fmt_b(sum(R$funding_trend$funding))`** across
+**`r format(sum(R$funding_trend$awards), big.mark=",")`** award-years. Support is
+concentrated — a **Gini of `r sprintf("%.2f", R$concentration$gini)`**, with the
+top 10% of PIs holding **`r sprintf("%.0f%%", 100*R$concentration$top10)`** of dollars
+(FY`r max(years)`). The largest single contacts:
+
+```{r top-pis}
+R$concentration$top |> transmute(pi_name, funding = round(funding), awards)
+```
+
+# 2 · Outputs — what the science produced
+
+```{r outputs}
+prod_research <- R$productivity |> filter(family == "research")
+data.frame(
+  Signal = c("Linked publications sampled", "Median RCR (field- & time-normalized)",
+             "Mean RCR", "Research-grant output (median pubs / $1M)"),
+  Value = c(format(R$n_pmids_sampled, big.mark = ","),
+            sprintf("%.2f", median(R$rcr$rcr, na.rm = TRUE)),
+            sprintf("%.2f", mean(R$rcr$rcr, na.rm = TRUE)),
+            if (nrow(prod_research)) sprintf("%.1f", prod_research$median_pubs_per_M) else "—"))
+```
+
+An RCR of **1.0 is the NIH-funded median by construction**; this portfolio's sampled
+median of **`r sprintf("%.2f", median(R$rcr$rcr, na.rm=TRUE))`** places it
+`r ifelse(median(R$rcr$rcr, na.rm=TRUE) >= 1, "at or above", "below")` that benchmark.
+Output-per-dollar is shown **within mechanism family** so shared cores and training
+grants don't distort the research-grant read:
+
+```{r prod-table}
+R$productivity |> filter(family != "other") |>
+  transmute(family, grants, funding_M, median_pubs_per_M)
+```
+
+```{r tx-outcome, results='asis', fig.width=7, fig.height=3}
+if (R$has_condition) {
+  cat("# 3 · Translation — reaching patients\n\n")
+  tx <- data.frame(
+    Signal = c(sprintf("Clinical trials for '%s'", R$condition$label),
+               "...with posted results",
+               sprintf("FDA labels matching '%s'", R$condition$fda_indication)),
+    Value = c(format(R$trials, big.mark = ","),
+              format(R$trials_with_results, big.mark = ","),
+              format(R$drugs$total, big.mark = ",")))
+  cat(knitr::kable(tx), sep = "\n"); cat("\n\n")
+  cat(sprintf("Example FDA-labeled therapies for the indication: **%s**.\n\n",
+              paste(head(R$drugs$drugs, 6), collapse = ", ")))
+  cat(paste0("> These trial and approval counts span the *whole field*, NIH-funded ",
+    "or not - the honest denominator for \"did the science reach the clinic,\" not ",
+    "an NIH attribution.\n\n"))
+  cat("# 4 · Outcome — the nation's health\n\n")
+  if (nrow(R$mortality)) {
+    print(ggplot(R$mortality, aes(year, aadr)) +
+      geom_line(color = "firebrick") + geom_point(color = "firebrick") +
+      labs(x = NULL, y = "age-adjusted deaths / 100k",
+           title = sprintf("%s — US age-adjusted mortality", R$condition$label)) +
+      theme_minimal())
+  }
+  cat(sprintf(paste0("\n\nAcross the window, age-adjusted %s mortality moved **%s**. ",
+    "Set against the funding trend, that is *not* an efficiency verdict - it is the ",
+    "juxtaposition the office is meant to see and interrogate, with the caveat below ",
+    "traveling alongside it.\n\n"),
+    tolower(R$condition$label), fmt_pct(R$mortality_aadr_change_pct)))
+} else {
+  cat("# 3 · Translation & outcome — omitted (cross-cutting IC)\n\n")
+  cat(sprintf(paste0("> No single condition represents **%s**, so the field-level ",
+    "trial, FDA-approval, and mortality series are intentionally left out - attaching ",
+    "one condition's outcomes to a cross-cutting IC would misrepresent both. The ",
+    "structural read above (inputs, outputs, coverage) stands on its own; add a ",
+    "condition lens explicitly when one applies.\n\n"), R$ic))
+}
+```
+
+# 5 · Coverage & caveats — how much to trust this
+
+```{r coverage}
+R$coverage |> transmute(mechanism_family = strat, grants, linked, coverage_pct)
+```
+
+```{r coverage-note, results='asis'}
+cat(sprintf(
+  "- **Linkage coverage** above shows where award→publication edges actually exist; the `other` bucket (contracts/non-research codes) is near-empty and excluded from output metrics.\n- **Latency & censoring:** median grant→first-pub latency is %.0f year(s), and **%.0f%% of grants are right-censored** (no linked pub yet) — recent years understate output.\n- **RCR** is a %d-publication *sample*, not the full portfolio.\n",
+  R$latency$median, 100 * R$latency$pct_censored, R$n_pmids_sampled))
+```
+
+```{r final-caveat, results='asis'}
+if (R$has_condition) cat(sprintf("> **%s**\n", R$caveat))
+```
+
+```{r footer, results='asis'}
+lbl <- if (R$has_condition) R$condition$label else "cross-cutting (no condition)"
+cat(sprintf("\n---\n*Generated by nih-science-agent (native-R) — %s · %s · FY%d–%d. All figures from public NIH RePORTER/iCite, ClinicalTrials.gov, openFDA, and CDC NCHS.*",
+            R$ic, lbl, min(years), max(years)))
+```
