@@ -1,0 +1,96 @@
+---
+title: "4 · Health pulse"
+subtitle: "Juxtaposing NIH inputs against the nation's outcome for one condition"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    df_print: paged
+---
+
+```{r setup, include=FALSE}
+proj <- normalizePath("..")
+knitr::opts_knit$set(root.dir = proj)
+suppressMessages({
+  library(dplyr); library(ggplot2)
+  for (f in c("cache.R", "reporter.R", "clinicaltrials.R", "cdc.R", "fda.R", "conditions.R"))
+    source(file.path(proj, "R", f))
+})
+knitr::opts_chunk$set(message = FALSE, warning = FALSE)
+```
+
+For one canonical condition we assemble the full arc on a single page:
+
+```
+Input    : NIH funding by fiscal year, award count   (RePORTER)
+Output   : clinical trials                            (ClinicalTrials.gov)
+Translate: FDA-approved drugs for the indication      (openFDA)
+Outcome  : age-adjusted mortality trend               (CDC NCHS)
+```
+
+The crosswalk is a small **curated, auditable dictionary** — not an ML matcher.
+Each condition carries the handles needed to pull every series.
+
+```{r}
+list_conditions()
+```
+
+## A pulse for diabetes (FY2008–2017)
+
+```{r pulse}
+p <- condition_pulse("diabetes", years = 2008:2017, per_year_cap = 1000)
+cat(sprintf("%s · $%.2fB over %d-%d · %d distinct awards%s\n",
+            p$condition_label, p$total_funding / 1e9,
+            min(p$years), max(p$years), p$distinct_awards,
+            if (p$funding_is_floor) " (a FLOOR — some years hit the record cap)" else ""))
+cat(sprintf("Trials: %d (%d with posted results) · FDA-labeled drugs: %d\n",
+            p$trial_count, p$trials_with_results, p$approved_drug_count))
+```
+
+### Input: NIH funding trend
+
+```{r funding, fig.width=6.5, fig.height=3.2}
+ggplot(p$funding_by_year, aes(fiscal_year, total_funding / 1e9)) +
+  geom_col(fill = "steelblue") +
+  scale_x_continuous(breaks = p$years) +
+  labs(x = NULL, y = "NIH funding ($B)",
+       title = sprintf("%s — NIH funding by fiscal year", p$condition_label)) +
+  theme_minimal()
+```
+
+### Outcome: age-adjusted mortality
+
+```{r mortality, fig.width=6.5, fig.height=3.2}
+p$mortality
+ggplot(p$mortality, aes(year, aadr)) +
+  geom_line(color = "firebrick") + geom_point(color = "firebrick") +
+  labs(x = NULL, y = "age-adjusted deaths / 100k",
+       title = sprintf("%s — US age-adjusted mortality", p$condition_label)) +
+  theme_minimal()
+```
+
+```{r}
+cat(sprintf("Mortality (AADR) change across the window: %+.1f%%\n",
+            p$mortality_aadr_change_pct))
+```
+
+### Translation: FDA-labeled drugs
+
+```{r}
+cat(p$approved_drug_count, "labels match the indication. Examples:\n")
+cat(paste("  -", p$example_drugs), sep = "\n")
+```
+
+## Why this is a juxtaposition, not a scorecard
+
+```{r}
+cat(strwrap(p$caveat, width = 86), sep = "\n")
+```
+
+Funding rose ~13% across the decade while age-adjusted diabetes mortality was
+roughly flat (`r sprintf("%+.1f%%", p$mortality_aadr_change_pct)`). That is **not**
+an indictment of NIH: mortality reflects a 10–30y research lag, countless non-NIH
+drivers, and reactive funding (dollars often rise *because* a problem is worsening).
+The platform's stance is to **show the series side by side** and refuse to compute
+a "return per death averted." The honest read is the contrast itself — and the
+disclosed caveats that travel with it.

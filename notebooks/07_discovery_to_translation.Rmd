@@ -1,0 +1,62 @@
+---
+title: "7 · Discovery → translation"
+subtitle: "Tracing a basic-science grant's reach into the clinic via citations"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    df_print: paged
+---
+
+```{r setup, include=FALSE}
+proj <- normalizePath("..")
+knitr::opts_knit$set(root.dir = proj)
+suppressMessages({
+  library(dplyr)
+  for (f in c("cache.R", "reporter.R", "icite.R", "clinicaltrials.R", "analysis.R"))
+    source(file.path(proj, "R", f))
+})
+knitr::opts_chunk$set(message = FALSE, warning = FALSE)
+```
+
+The direct award→trial link misses the basic grant that *enabled* a therapy
+years later. We recover that chain through the **citation graph**, using a signal
+NIH precomputes: iCite's `cited_by_clin` — the *clinical* articles citing a paper.
+
+```
+award → publications → clinical citers (iCite) → distinct clinical reach + APT
+```
+
+## Ranking a portfolio: which GWAS grants reached the clinic?
+
+```{r}
+gwas <- translation_scan(query = "GWAS", fiscal_years = 2008:2014, max_grants = 12)
+gwas |> head(8)
+```
+
+The leaders are pharmacogenomics (anti-TNF response, drug transporters) — and
+their high **APT** (Approximate Potential to Translate, ~0.7) corroborates that
+they are genuinely translational, not just well-cited basic science.
+
+## How do different technologies reach the clinic?
+
+```{r}
+summarise_tech <- function(q, yrs) {
+  s <- translation_scan(query = q, fiscal_years = yrs, max_grants = 12)
+  tibble(top_reach = max(s$clinical_reach), median_reach = median(s$clinical_reach),
+         mean_APT = round(mean(s$mean_apt, na.rm = TRUE), 2))
+}
+bind_rows(
+  cbind(technology = "GWAS",        summarise_tech("GWAS", 2008:2014)),
+  cbind(technology = "Single-cell", summarise_tech("single cell sequencing", 2012:2017)),
+  cbind(technology = "Exposomics",  summarise_tech("exposome", 2012:2019))
+)
+```
+
+GWAS reaches the clinic most (pharmacogenomics); single-cell is younger; and
+**exposomics' reach runs through infrastructure** (centers/cohorts), not a drug
+pipeline. The platform makes that contrast characterizable from public data.
+
+> **Caveats.** Clinical reach is *inferred* (papers iCite flags clinical that cite
+> the grant's work), not therapies; centers/training grants inflate reach (APT
+> helps separate); younger fields are right-censored.

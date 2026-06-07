@@ -1,0 +1,72 @@
+---
+title: "6 · Do RFAs produce different science than parent PAs?"
+subtitle: "A confounded raw comparison, corrected with a controlled regression"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    df_print: paged
+---
+
+```{r setup, include=FALSE}
+proj <- normalizePath("..")
+knitr::opts_knit$set(root.dir = proj)
+suppressMessages({
+  library(dplyr)
+  source(file.path(proj, "R", "cache.R")); source(file.path(proj, "R", "duckdb_store.R"))
+})
+knitr::opts_chunk$set(message = FALSE, warning = FALSE)
+```
+
+Does the *type* of funding opportunity relate to output? The **raw** comparison
+is confounded — RFAs fund bigger grants and bigger mechanisms. Here it is
+corrected with a controlled regression over the full ExPORTER bulk data.
+
+```{r}
+con <- bulk_connect()
+df <- bulk_grant_panel(con, ic = "NCI", years = 2006:2010, funding_floor = 1e5)
+bulk_disconnect(con)
+
+df <- df |> filter(foa_type %in% c("RFA", "PA", "PAR", "NONE"))
+keep <- df |> count(activity_code) |> filter(n >= 30) |> pull(activity_code)
+df <- df |> filter(activity_code %in% keep) |>
+  mutate(log_funding = log(funding), log_pubs = log1p(pubs),
+         foa_type = relevel(factor(foa_type), ref = "PA"))
+sprintf("%d grants · %d mechanisms · NCI FY2006–2010", nrow(df), length(keep))
+```
+
+## The naïve picture (confounded)
+
+```{r}
+df |> group_by(foa_type) |>
+  summarise(grants = n(), mean_funding = round(mean(funding)),
+            mean_pubs = round(mean(pubs), 1), .groups = "drop")
+```
+
+Taken at face value, **RFA grants look the most productive**. But they also fund
+larger grants and different mechanisms.
+
+## The controlled regression
+
+`log(1 + publications)` on FOA type, holding **mechanism, fiscal year, and (log)
+funding** constant (PA is the reference).
+
+```{r}
+m <- lm(log_pubs ~ foa_type + log_funding + factor(activity_code) + factor(fiscal_year),
+        data = df)
+co <- summary(m)$coefficients
+fo <- co[grepl("^foa_type", rownames(co)), , drop = FALSE]
+tibble(vs_PA = sub("foa_type", "", rownames(fo)),
+       pct_diff = round((exp(fo[, "Estimate"]) - 1) * 100),
+       p = signif(fo[, "Pr(>|t|)"], 2))
+cat(sprintf("R^2 = %.2f, n = %d\n", summary(m)$r.squared, nrow(df)))
+```
+
+The sign **flips**: adjusted for mechanism, year, and funding, **RFA-funded grants
+produce ~30–35% *fewer* publications than parent-PA grants**. The raw advantage was
+entirely a confound.
+
+> **Caveats.** Publications are a narrow output (RFAs target cohorts, datasets,
+> trials, translation that pubs miss); the model controls for mechanism/funding/
+> year but not topic, PI track record, or grant intent; linkage is
+> authoritative-only. It says *what*, not *why* — not "RFAs are wasteful."

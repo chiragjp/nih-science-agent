@@ -1,0 +1,78 @@
+---
+title: "3 · Research productivity (publications per dollar)"
+subtitle: "Output-per-$ at population scale — split by mechanism family"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    df_print: paged
+---
+
+```{r setup, include=FALSE}
+proj <- normalizePath("..")
+knitr::opts_knit$set(root.dir = proj)
+suppressMessages({
+  library(dplyr); library(ggplot2)
+  source(file.path(proj, "R", "cache.R")); source(file.path(proj, "R", "duckdb_store.R"))
+})
+knitr::opts_chunk$set(message = FALSE, warning = FALSE)
+```
+
+"Publications per dollar" is only honest **within a mechanism family**. A shared
+center core (`U54`, `P30`) carries dozens of papers under one award; a training
+grant (`T32`, `F31`) carries few by design. Ranking them on one axis is a
+category error — so we classify every core project by activity code first.
+
+> **Prerequisite (one time):** the Python `nih-agent bulk build` / `build-pubs`
+> populated `data/processed/nih.duckdb` (2.1M awards, 6.1M publication links).
+> R opens that same file directly.
+
+```{r}
+con <- bulk_connect()
+```
+
+## Output per $1M by mechanism family (NCI, FY2010)
+
+```{r}
+fam <- bulk_productivity_by_mechanism(con, ic = "NCI", years = 2010)
+fam
+```
+
+```{r fam-plot, fig.width=6.5, fig.height=3.2}
+fam |> filter(family != "other") |>
+  ggplot(aes(reorder(family, median_pubs_per_M), median_pubs_per_M)) +
+  geom_col(fill = "steelblue") + coord_flip() +
+  labs(x = NULL, y = "median linked pubs per $1M",
+       title = "NCI FY2010 — output per dollar by mechanism family") +
+  theme_minimal()
+```
+
+Two things the split makes visible and a single ranking would hide:
+
+- **Center cores** post the most publications per dollar (they aggregate the
+  output of many sub-projects under one administrative award).
+- The **`other`** bucket — contracts and non-research activity codes — links to
+  essentially **zero** publications. Folding it into a research ranking would
+  silently depress the denominator. Naming it is the honest move.
+
+## The same split is portfolio-wide, not NCI-specific
+
+```{r}
+bind_rows(
+  cbind(ic = "NIAID", bulk_productivity_by_mechanism(con, ic = "NIAID", years = 2010) |>
+          filter(family == "research") |> select(median_pubs_per_M, grants)),
+  cbind(ic = "NIGMS", bulk_productivity_by_mechanism(con, ic = "NIGMS", years = 2010) |>
+          filter(family == "research") |> select(median_pubs_per_M, grants)),
+  cbind(ic = "NHLBI", bulk_productivity_by_mechanism(con, ic = "NHLBI", years = 2010) |>
+          filter(family == "research") |> select(median_pubs_per_M, grants))
+)
+```
+
+```{r}
+bulk_disconnect(con)
+```
+
+> **Caveats.** Publication links are authoritative (RePORTER's own attribution)
+> but right-censored for recent years; per-dollar output is a *proxy* for
+> productivity, not for value; and the median, not the mean, is reported because
+> a handful of mega-cores skew the average upward.

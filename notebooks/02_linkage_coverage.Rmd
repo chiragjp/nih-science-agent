@@ -1,0 +1,100 @@
+---
+title: "2 · Knowledge graph & linkage coverage"
+subtitle: "Award→publication edges, and where they are missing"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    df_print: paged
+---
+
+```{r setup, include=FALSE}
+proj <- normalizePath("..")
+knitr::opts_knit$set(root.dir = proj)
+suppressMessages({
+  library(dplyr); library(ggplot2)
+  for (f in c("cache.R", "reporter.R", "duckdb_store.R"))
+    source(file.path(proj, "R", f))
+})
+knitr::opts_chunk$set(message = FALSE, warning = FALSE)
+```
+
+The platform's central object is a **knowledge graph**: awards linked to PIs,
+institutions, ICs, FOAs, publications, and trials — every edge carrying
+provenance. The single most important property of that graph is its **coverage**:
+*which awards actually have the edges an analysis assumes?* Coverage is never
+uniform, and the design doc's rule is to disclose the gradient before analyzing
+on top of it.
+
+## One award's neighborhood (a single edge list)
+
+A grant's authoritative publication edges come straight from RePORTER.
+
+```{r}
+proj_award <- reporter_search_projects(query = "single cell", fiscal_years = 2015, limit = 1)[[1]]
+core <- proj_award$core_project_num
+pmids <- reporter_get_publications(core, limit = 50)
+cat(sprintf("award %s (%s, FY%s)\n  %d linked publications: %s ...\n",
+            core, proj_award$ic, proj_award$fiscal_year, length(pmids),
+            paste(head(pmids, 6), collapse = ", ")))
+```
+
+Each edge is `award --produced--> publication`, asserted by NIH itself (not a
+text-match guess). That provenance is what lets coverage be measured honestly.
+
+## Coverage at scale: who has the edges?
+
+The bulk DuckDB store holds every core project and its publication links, so we
+can compute the fraction of grants with ≥1 linked publication and **stratify** it.
+
+```{r}
+con <- bulk_connect()
+```
+
+### By Institute / Center (FY2010)
+
+```{r cov-ic, fig.width=6.5, fig.height=3.6}
+cov_ic <- bulk_coverage_stratified(con, by = "ic", years = 2010, min_grants = 300)
+cov_ic |> head(15)
+cov_ic |> head(15) |>
+  ggplot(aes(reorder(strat, coverage_pct), coverage_pct)) +
+  geom_col(fill = "steelblue") + coord_flip() +
+  labs(x = "IC", y = "% of grants with >= 1 linked pub",
+       title = "Publication-link coverage by IC (FY2010)") + theme_minimal()
+```
+
+### By mechanism family (NCI)
+
+```{r}
+bulk_coverage_stratified(con, by = "family", ic = "NCI", years = 2008:2012)
+```
+
+Coverage is high for research and center grants but the **`other`** bucket
+(contracts, non-research codes) has near-zero publication edges — a real gap, not
+noise. Any productivity or translation analysis must exclude or flag it; pretending
+those grants simply produced nothing would be a measurement artifact.
+
+### By grant age (the censoring gradient)
+
+```{r cov-age, fig.width=6.5, fig.height=3.2}
+cov_age <- bulk_coverage_stratified(con, by = "fiscal_year", ic = "NCI",
+                                    years = 2005:2018, min_grants = 100)
+cov_age |> arrange(strat) |>
+  ggplot(aes(strat, coverage_pct)) + geom_line(color = "firebrick") +
+  geom_point(color = "firebrick") +
+  labs(x = "fiscal year", y = "% with >= 1 linked pub",
+       title = "Coverage falls for recent grants (right-censoring)") + theme_minimal()
+```
+
+Recent fiscal years show **lower** coverage — not because new grants are
+unproductive, but because publications and their RePORTER links lag the award by
+years. This right-censoring is exactly why every downstream analysis reports the
+window and the coverage alongside the result.
+
+```{r}
+bulk_disconnect(con)
+```
+
+> **The discipline.** Coverage is a first-class output here, not an afterthought.
+> An edge that doesn't exist is reported as missing — never silently treated as a
+> zero — so the graph's gaps shape the conclusions instead of hiding inside them.

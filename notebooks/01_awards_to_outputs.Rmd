@@ -1,0 +1,79 @@
+---
+title: "1 · From awards to outputs"
+subtitle: "RePORTER awards → publications (with iCite RCR) → clinical trials"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    df_print: paged
+---
+
+```{r setup, include=FALSE}
+# Native-R connectors (no Python). root.dir = project root so the cache resolves.
+proj <- normalizePath("..")
+knitr::opts_knit$set(root.dir = proj)
+suppressMessages({
+  library(dplyr); library(tibble)
+  for (f in c("cache.R", "reporter.R", "icite.R", "clinicaltrials.R"))
+    source(file.path(proj, "R", f))
+})
+knitr::opts_chunk$set(message = FALSE, warning = FALSE)
+```
+
+This notebook walks the core spine of the platform in **pure R** (via `httr2` /
+`jsonlite`): find NIH **awards**, follow their authoritative **publication
+links**, enrich with **iCite** citation metrics, and surface the **clinical
+trials** an award funded. Responses cache under `data/cache/`, so re-running is
+fast and offline after the first pass.
+
+## Find awards
+
+```{r}
+awards <- reporter_search_projects(
+  query = "PFAS proteomics", institutes = "NIEHS",
+  fiscal_years = 2018:2024, limit = 5
+)
+reporter_as_tibble(awards) |> select(core_project_num, fiscal_year, ic, total_cost, title)
+```
+
+### Search by investigator
+
+```{r}
+khatri <- reporter_search_projects(pi_names = "Purvesh Khatri", limit = 100)
+cat(length(khatri), "awards; institutions:\n")
+unique(vapply(khatri, function(a) a$organization %||% NA_character_, character(1)))
+```
+
+## Link an award to its publications
+
+The authoritative publication links from RePORTER, enriched with iCite's
+field-normalized **Relative Citation Ratio** (1.0 = median NIH-funded paper).
+
+```{r}
+pmids <- reporter_get_publications("R01ES032470", limit = 30)
+icite_fetch_metrics(pmids) |>
+  arrange(desc(rcr)) |>
+  transmute(pmid, year, rcr = round(rcr, 1), citations, title = substr(title, 1, 60)) |>
+  head(8)
+```
+
+## Citation metrics directly
+
+```{r}
+icite_fetch_metrics(c("22745249", "36656942")) |>   # CRISPR landmarks
+  select(pmid, year, rcr, citations, nih_percentile)
+```
+
+## Clinical trials an award funded
+
+Trials that *self-report* the grant number give an authoritative award→trial link.
+
+```{r}
+trials <- ct_find_trials_for_grant("R01DK075877")
+tibble(
+  nct_id = vapply(trials, \(t) t$nct_id, character(1)),
+  status = vapply(trials, \(t) t$overall_status %||% NA, character(1)),
+  phase  = vapply(trials, \(t) t$phase %||% NA, character(1)),
+  title  = vapply(trials, \(t) substr(t$brief_title, 1, 60), character(1))
+)
+```

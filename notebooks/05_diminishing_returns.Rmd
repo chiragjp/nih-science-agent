@@ -1,0 +1,50 @@
+---
+title: "5 · Diminishing returns"
+subtitle: "Does research output per dollar fall as a PI's grant support rises?"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    df_print: paged
+---
+
+```{r setup, include=FALSE}
+proj <- normalizePath("..")
+knitr::opts_knit$set(root.dir = proj)
+suppressMessages({
+  library(dplyr); library(ggplot2)
+  for (f in c("cache.R", "reporter.R", "icite.R", "clinicaltrials.R", "analysis.R"))
+    source(file.path(proj, "R", f))
+})
+knitr::opts_chunk$set(message = FALSE, warning = FALSE)
+```
+
+The NIH Extramural Nexus ("Open Mike") repeatedly found **diminishing returns**
+to grant support: as a PI's total funding rises, research **output per dollar**
+falls. Here it is reproduced in pure R — support = total RePORTER funding per PI,
+output = summed iCite **Relative Citation Ratio (RCR)** over their linked papers.
+
+```{r}
+dr <- diminishing_returns(institutes = "NIDDK", query = "beta cell",
+                          fiscal_years = 2014:2015, max_pis = 24)
+bins <- dr |>
+  group_by(quartile) |>
+  summarise(n_pis = n(), mean_funding = mean(funding),
+            mean_rcr_per_million = mean(rcr_per_million), .groups = "drop")
+bins
+```
+
+Output-per-dollar declines across the lower quartiles — the diminishing-returns
+signature (the top quartile holds far more money for proportionally less output).
+
+```{r dr-plot, fig.width=6, fig.height=3.5}
+ggplot(bins, aes(factor(quartile), mean_rcr_per_million)) +
+  geom_col(fill = "steelblue") +
+  labs(x = "PI funding quartile", y = "RCR per $1M (output per dollar)",
+       title = "Diminishing returns: output per dollar by funding quartile") +
+  theme_minimal()
+```
+
+> **Caveats.** Output is lifetime summed RCR over authoritative pub links (recent
+> awards are right-censored); support is a funding proxy for NIH's Grant Support
+> Index; this is a bounded, single-topic sample. Compare *within* a cohort.

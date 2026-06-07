@@ -1,0 +1,79 @@
+---
+title: "8 · Population-scale analyses (ExPORTER → DuckDB)"
+subtitle: "Funding concentration, output-per-$, FOA type, and latency — no API caps"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    df_print: paged
+---
+
+```{r setup, include=FALSE}
+proj <- normalizePath("..")
+knitr::opts_knit$set(root.dir = proj)
+suppressMessages({
+  library(dplyr); library(ggplot2)
+  source(file.path(proj, "R", "cache.R")); source(file.path(proj, "R", "duckdb_store.R"))
+})
+knitr::opts_chunk$set(message = FALSE, warning = FALSE)
+```
+
+The RePORTER API caps result offsets below NIH's annual award count, so all-NIH
+questions need the **bulk ExPORTER files in DuckDB**. R opens the same store the
+Python `bulk build` produced (2.1M awards, 6.1M publication links).
+
+> **Prerequisite (one time):** `nih-agent bulk build 2000:2025` and
+> `nih-agent bulk build-pubs 2000:2025` (the Python CLI builds the DuckDB file).
+
+```{r}
+con <- bulk_connect()
+```
+
+## Funding concentration (top-decile share + Gini)
+
+```{r}
+cc <- bulk_concentration(con, ic = "NCI", year = 2021, top_n = 5)
+cat(sprintf("NCI FY2021: %d PIs · $%.1fB · top 1%%=%.0f%% · top 10%%=%.0f%% · Gini %.2f\n",
+            cc$n_pis, cc$total / 1e9, 100 * cc$top1, 100 * cc$top10, cc$gini))
+cc$top |> transmute(pi_name, funding = round(funding), awards)
+```
+
+> The extreme top is inflated by large contracts/center grants under one
+> administrative contact PI — aggregate shares and Gini are the robust read.
+
+## Diminishing returns at full scale
+
+```{r dr, fig.width=6, fig.height=3.5}
+p <- bulk_funding_vs_output(con, ic = "NCI", year = 2010, funding_floor = 250000)
+bins <- p |> group_by(quartile) |>
+  summarise(n = n(), mean_funding = mean(funding),
+            mean_pubs = mean(pubs), pubs_per_M = mean(pubs_per_million), .groups = "drop")
+bins
+ggplot(bins, aes(factor(quartile), pubs_per_M)) + geom_col(fill = "steelblue") +
+  labs(x = "PI funding quartile", y = "linked pubs per $1M",
+       title = "NCI FY2010 — output per dollar by funding quartile") + theme_minimal()
+```
+
+## Output by FOA type (RFA vs PA)
+
+```{r}
+bulk_foa_types(con, ic = "NCI", year = 2010) |>
+  transmute(foa_type, awards, funding_M = round(funding / 1e6),
+            pubs, pubs_per_million = round(pubs_per_million, 1))
+```
+
+## Grant → first-publication latency (with censoring)
+
+```{r}
+lat <- bulk_latency(con, years = 2005:2012)
+cat(sprintf("%d grants · %d with a linked pub\n  median %.0fy (IQR %.0f–%.0f) · %.0f%% censored\n",
+            lat$grants_total, lat$grants_with_output, lat$median, lat$p25, lat$p75,
+            100 * lat$pct_censored))
+```
+
+```{r}
+bulk_disconnect(con)
+```
+
+Censoring is reported, not hidden: silently dropping the ~40% of grants with no
+linked publication would bias the median downward.
